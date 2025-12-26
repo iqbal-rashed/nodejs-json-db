@@ -1,6 +1,7 @@
 import { defineConfig } from 'tsup';
 
-export default defineConfig([  {
+export default defineConfig([
+  {
     entry: ['src/index.ts'],
     format: ['cjs'],
     dts: true,
@@ -11,7 +12,8 @@ export default defineConfig([  {
     minify: true,
     shims: true,
     target: 'node18',
-  },{
+  },
+  {
     entry: ['src/index.ts'],
     format: ['esm'],
     dts: false,
@@ -22,4 +24,5 @@ export default defineConfig([  {
     minify: true,
     shims: true,
     target: 'node18',
-  }]);
+  },
+]);

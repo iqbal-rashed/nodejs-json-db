@@ -108,7 +108,13 @@ describe('Collection', () => {
       await collection.insertMany([
         { name: 'Alice', email: 'alice@example.com', age: 25, active: true, tags: ['admin'] },
         { name: 'Bob', email: 'bob@example.com', age: 30, active: false, tags: ['user'] },
-        { name: 'Charlie', email: 'charlie@example.com', age: 35, active: true, tags: ['user', 'premium'] },
+        {
+          name: 'Charlie',
+          email: 'charlie@example.com',
+          age: 35,
+          active: true,
+          tags: ['user', 'premium'],
+        },
       ]);
     });
 
@@ -173,7 +179,7 @@ describe('Collection', () => {
 
   describe('findById', () => {
     it('should find document by ID', async () => {
-      const inserted = await collection.insert({
+      await collection.insert({
         _id: 'test-id',
         name: 'Test User',
         email: 'test@example.com',
@@ -183,8 +189,8 @@ describe('Collection', () => {
 
       const found = await collection.findById('test-id');
       expect(found).not.toBeNull();
-      expect(found!._id).toBe('test-id');
-      expect(found!.name).toBe('Test User');
+      expect(found?._id).toBe('test-id');
+      expect(found?.name).toBe('Test User');
     });
 
     it('should return null for non-existent ID', async () => {
