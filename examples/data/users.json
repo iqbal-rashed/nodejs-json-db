@@ -1,0 +1,31 @@
+{
+  "name": "users",
+  "documents": [
+    {
+      "name": "John Doe",
+      "email": "john@example.com",
+      "age": 32,
+      "role": "user",
+      "createdAt": "2025-12-26T08:14:25.769Z",
+      "_id": "694e43e1fae4c97c43f96698"
+    },
+    {
+      "name": "Jane Smith",
+      "email": "jane@example.com",
+      "age": 26,
+      "role": "user",
+      "createdAt": "2025-12-26T08:14:25.771Z",
+      "_id": "694e43e1fae4c97c43f96699"
+    },
+    {
+      "name": "Bob Wilson",
+      "email": "bob@example.com",
+      "age": 36,
+      "role": "user",
+      "createdAt": "2025-12-26T08:14:25.771Z",
+      "_id": "694e43e1fae4c97c43f9669a"
+    }
+  ],
+  "createdAt": "2025-12-26T08:14:25.767Z",
+  "updatedAt": "2025-12-26T08:14:25.777Z"
+}
