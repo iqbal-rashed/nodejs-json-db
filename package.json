@@ -24,7 +24,8 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build && npm run test",
-    "benchmark": "tsx examples/benchmark.ts"
+    "benchmark": "tsx examples/benchmark.ts",
+    "prepare": "husky"
   },
   "files": [
     "dist",
@@ -66,6 +67,8 @@
     "@vitest/coverage-v8": "^4.0.16",
     "eslint": "^9.18.0",
     "globals": "^15.14.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
     "prettier": "^3.4.2",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
@@ -84,5 +87,11 @@
     "zod": {
       "optional": true
     }
+  },
+  "lint-staged": {
+    "*.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ]
   }
 }
