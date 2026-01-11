@@ -21,7 +21,7 @@ const DEFAULT_OPTIONS: Partial<JsonDBOptions> = {
 /**
  * Collection type union for all modes
  */
-type AnyCollection<T extends Document> =
+export type AnyCollection<T extends Document> =
   | Collection<T>
   | HighConcurrencyCollection<T>
   | LazyCollection<T>;

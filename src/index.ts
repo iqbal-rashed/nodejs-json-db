@@ -1,6 +1,7 @@
 // Main exports
 export { JsonDB } from './core/JsonDB';
 export { Collection } from './core/Collection';
+export { LazyCollection } from './core/LazyCollection';
 
 // High-concurrency exports
 export { HighConcurrencyCollection } from './core/HighConcurrencyCollection';
@@ -11,6 +12,9 @@ export { WorkerPool, parallelLimit } from './core/WorkerPool';
 
 // Schema validator type (for Zod integration)
 export type { SchemaValidator } from './core/Collection';
+
+// Collection type union
+export type { AnyCollection } from './core/JsonDB';
 
 // Types
 export type {
