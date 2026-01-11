@@ -3,6 +3,8 @@ import { Storage } from './Storage';
 import { Collection } from './Collection';
 import { HighConcurrencyStorage } from './HighConcurrencyStorage';
 import { HighConcurrencyCollection } from './HighConcurrencyCollection';
+import { LazyStorage } from './LazyStorage';
+import { LazyCollection } from './LazyCollection';
 import { CollectionError } from '../errors';
 import type { WorkerPoolStats } from './WorkerPool';
 
@@ -17,9 +19,12 @@ const DEFAULT_OPTIONS: Partial<JsonDBOptions> = {
 };
 
 /**
- * Collection type union for standard and high-concurrency modes
+ * Collection type union for all modes
  */
-type AnyCollection<T extends Document> = Collection<T> | HighConcurrencyCollection<T>;
+type AnyCollection<T extends Document> =
+  | Collection<T>
+  | HighConcurrencyCollection<T>
+  | LazyCollection<T>;
 
 /**
  * Stats returned by getStats() in high-concurrency mode
@@ -33,16 +38,19 @@ interface HighConcurrencyStats {
 /**
  * JsonDB - A lightweight JSON-based database for Node.js and Electron
  *
- * Supports two modes:
+ * Supports three modes:
  * - Standard mode: Single-file storage per collection (default)
  * - High-concurrency mode: Partitioned storage with write batching (opt-in)
+ * - Lazy loading mode: Memory-efficient with document-level LRU caching (opt-in)
  */
 export class JsonDB {
   private readonly options: JsonDBOptions;
   private readonly storage: Storage | null;
   private readonly hcStorage: HighConcurrencyStorage | null;
+  private readonly lazyStorage: LazyStorage | null;
   private readonly collections: Map<string, AnyCollection<Document>> = new Map();
   private readonly isHighConcurrency: boolean;
+  private readonly isLazyLoading: boolean;
   private connected: boolean = false;
 
   /**
@@ -52,34 +60,56 @@ export class JsonDB {
   constructor(options: JsonDBOptions) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
     this.isHighConcurrency = options.highConcurrency?.enabled ?? false;
+    this.isLazyLoading = options.lazyLoading?.enabled ?? false;
+
+    // Can't use both high-concurrency and lazy loading at the same time
+    if (this.isHighConcurrency && this.isLazyLoading) {
+      throw new Error('Cannot enable both highConcurrency and lazyLoading modes simultaneously');
+    }
 
     if (this.isHighConcurrency) {
       this.storage = null;
       this.hcStorage = new HighConcurrencyStorage(this.options);
+      this.lazyStorage = null;
+    } else if (this.isLazyLoading) {
+      this.storage = null;
+      this.hcStorage = null;
+      this.lazyStorage = new LazyStorage(this.options);
     } else {
       this.storage = new Storage(this.options);
       this.hcStorage = null;
+      this.lazyStorage = null;
     }
   }
 
   /**
-   * Get the standard storage (throws if in HC mode)
+   * Get the standard storage (throws if in HC or lazy mode)
    */
   private getStorage(): Storage {
     if (this.storage === null) {
-      throw new Error('Storage is not available in high-concurrency mode');
+      throw new Error('Storage is not available in high-concurrency or lazy loading mode');
     }
     return this.storage;
   }
 
   /**
-   * Get the high-concurrency storage (throws if in standard mode)
+   * Get the high-concurrency storage (throws if in standard or lazy mode)
    */
   private getHCStorage(): HighConcurrencyStorage {
     if (this.hcStorage === null) {
-      throw new Error('HighConcurrencyStorage is not available in standard mode');
+      throw new Error('HighConcurrencyStorage is not available in standard or lazy loading mode');
     }
     return this.hcStorage;
+  }
+
+  /**
+   * Get the lazy storage (throws if in standard or HC mode)
+   */
+  private getLazyStorage(): LazyStorage {
+    if (this.lazyStorage === null) {
+      throw new Error('LazyStorage is not available in standard or high-concurrency mode');
+    }
+    return this.lazyStorage;
   }
 
   /**
@@ -91,6 +121,12 @@ export class JsonDB {
     if (this.isHighConcurrency) {
       // Load existing collections from partitioned storage
       const collectionNames = await this.getHCStorage().listCollections();
+      for (const name of collectionNames) {
+        this.getOrCreateCollection(name);
+      }
+    } else if (this.isLazyLoading) {
+      // Load existing collections from lazy storage
+      const collectionNames = await this.getLazyStorage().list();
       for (const name of collectionNames) {
         this.getOrCreateCollection(name);
       }
@@ -128,11 +164,14 @@ export class JsonDB {
     if (this.hcStorage) {
       this.hcStorage.clearCache();
     }
+    if (this.lazyStorage) {
+      this.lazyStorage.clearCache();
+    }
 
     this.connected = false;
   }
 
-/**
+  /**
    * Get or create a collection
    * @param name Collection name
    * @param options Collection options (including optional Zod schema)
@@ -141,7 +180,12 @@ export class JsonDB {
     name: string,
     options?: {
       schema?: {
-        safeParse(data: unknown): { success: true; data: T } | { success: false; error: { issues: Array<{ path: PropertyKey[]; message: string; code?: string }> } };
+        safeParse(data: unknown):
+          | { success: true; data: T }
+          | {
+              success: false;
+              error: { issues: Array<{ path: PropertyKey[]; message: string; code?: string }> };
+            };
       };
     }
   ): AnyCollection<T> {
@@ -166,7 +210,12 @@ export class JsonDB {
     name: string,
     options?: {
       schema?: {
-        safeParse(data: unknown): { success: true; data: T } | { success: false; error: { issues: Array<{ path: PropertyKey[]; message: string; code?: string }> } };
+        safeParse(data: unknown):
+          | { success: true; data: T }
+          | {
+              success: false;
+              error: { issues: Array<{ path: PropertyKey[]; message: string; code?: string }> };
+            };
       };
     }
   ): AnyCollection<T> {
@@ -180,6 +229,11 @@ export class JsonDB {
         schema: options?.schema,
       });
       this.collections.set(name, collection as HighConcurrencyCollection<Document>);
+    } else if (this.isLazyLoading) {
+      const collection = new LazyCollection<T>(name, this.getLazyStorage(), {
+        schema: options?.schema,
+      });
+      this.collections.set(name, collection as LazyCollection<Document>);
     } else {
       const collection = new Collection<T>(name, this.getStorage(), {
         autoSave: this.options.autoSave,

@@ -1,2 +1,10 @@
 export { generateId, isValidId } from './id';
-export { deepClone, getNestedValue, setNestedValue, deleteNestedValue, isPlainObject, debounce } from './helpers';
+export {
+  deepClone,
+  getNestedValue,
+  setNestedValue,
+  deleteNestedValue,
+  isPlainObject,
+  debounce,
+  applyProjection,
+} from './helpers';

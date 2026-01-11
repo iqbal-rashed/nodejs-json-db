@@ -1,13 +1,5 @@
-import type {
-  Document,
-  Query,
-  UpdateOperators,
-  CollectionData,
-  FindOptions,
-  Sort,
-  SortOrder,
-} from '../types';
-import { Storage } from './Storage';
+import type { Document, Query, UpdateOperators, FindOptions, Sort, SortOrder } from '../types';
+import { LazyStorage } from './LazyStorage';
 import { QueryEngine } from './QueryEngine';
 import {
   generateId,
@@ -17,39 +9,27 @@ import {
   applyProjection,
 } from '../utils';
 import { DuplicateKeyError, ValidationError } from '../errors';
+import type { SchemaValidator } from './Collection';
 
 /**
- * Schema validator interface (compatible with Zod)
+ * LazyCollection - Memory-efficient collection using lazy loading storage
+ *
+ * Unlike standard Collection which loads all documents:
+ * - Only document IDs are kept in memory
+ * - Documents are loaded on-demand with LRU caching
+ * - Queries that scan all documents still need to load from disk
  */
-export interface SchemaValidator<T> {
-  safeParse(data: unknown):
-    | { success: true; data: T }
-    | {
-        success: false;
-        error: { issues: Array<{ path: PropertyKey[]; message: string; code?: string }> };
-      };
-}
-
-/**
- * Collection class for managing documents
- */
-export class Collection<T extends Document> {
+export class LazyCollection<T extends Document> {
   private readonly name: string;
-  private readonly storage: Storage;
+  private readonly storage: LazyStorage;
   private readonly queryEngine: QueryEngine;
-  private readonly autoSave: boolean;
-  private readonly saveDebounce: number;
   private readonly idGenerator: () => string;
   private readonly schema?: SchemaValidator<T>;
-  private saveTimeout: ReturnType<typeof setTimeout> | null = null;
-  private pendingSave: Promise<void> | null = null;
 
   constructor(
     name: string,
-    storage: Storage,
+    storage: LazyStorage,
     options: {
-      autoSave?: boolean;
-      saveDebounce?: number;
       idGenerator?: () => string;
       schema?: SchemaValidator<T>;
     } = {}
@@ -57,8 +37,6 @@ export class Collection<T extends Document> {
     this.name = name;
     this.storage = storage;
     this.queryEngine = new QueryEngine();
-    this.autoSave = options.autoSave ?? true;
-    this.saveDebounce = options.saveDebounce ?? 0;
     this.idGenerator = options.idGenerator ?? generateId;
     this.schema = options.schema;
   }
@@ -78,103 +56,30 @@ export class Collection<T extends Document> {
   }
 
   /**
-   * Get or create collection data
-   */
-  private async getData(): Promise<CollectionData<T>> {
-    const data = await this.storage.read<T>(this.name);
-
-    if (!data) {
-      const newData: CollectionData<T> = {
-        name: this.name,
-        documents: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      await this.storage.write(this.name, newData);
-      return newData;
-    }
-
-    return data;
-  }
-
-  /**
-   * Save collection data with debouncing
-   */
-  private async save(data: CollectionData<T>): Promise<void> {
-    if (!this.autoSave) return;
-
-    if (this.saveDebounce > 0) {
-      // Debounced save
-      if (this.saveTimeout) {
-        clearTimeout(this.saveTimeout);
-      }
-
-      return new Promise((resolve) => {
-        this.saveTimeout = setTimeout(async () => {
-          await this.storage.write(this.name, data);
-          this.saveTimeout = null;
-          resolve();
-        }, this.saveDebounce);
-      });
-    }
-
-    // Immediate save
-    await this.storage.write(this.name, data);
-  }
-
-  /**
-   * Force save any pending writes
-   */
-  async flush(): Promise<void> {
-    if (this.saveTimeout) {
-      clearTimeout(this.saveTimeout);
-      this.saveTimeout = null;
-    }
-
-    if (this.pendingSave) {
-      await this.pendingSave;
-    }
-
-    const data = await this.getData();
-    await this.storage.write(this.name, data);
-  }
-
-  /**
    * Insert a single document
    */
   async insert(doc: Omit<T, '_id'> & { _id?: string }): Promise<T> {
-    const data = await this.getData();
-
-    // Generate ID if not provided
     const _id = doc._id || this.idGenerator();
 
-    // Check for duplicate ID
-    if (data.documents.some((d) => d._id === _id)) {
+    // Check for duplicate
+    if (this.storage.hasDocument(this.name, _id)) {
       throw new DuplicateKeyError(this.name, _id);
     }
 
     const newDoc = { ...deepClone(doc), _id } as T;
     const validatedDoc = this.validate(newDoc);
-    data.documents.push(validatedDoc);
-
-    await this.save(data);
+    await this.storage.insertDocument(this.name, validatedDoc);
     return deepClone(validatedDoc);
   }
 
   /**
-   * Insert a single document without duplicate check (faster)
-   * In standard mode, this is equivalent to insert() but skips the duplicate check.
-   * Use this when you're certain the ID is unique.
+   * Insert without duplicate check (faster)
    */
   async insertFast(doc: Omit<T, '_id'> & { _id?: string }): Promise<T> {
-    const data = await this.getData();
-
     const _id = doc._id || this.idGenerator();
     const newDoc = { ...deepClone(doc), _id } as T;
     const validatedDoc = this.validate(newDoc);
-    data.documents.push(validatedDoc);
-
-    await this.save(data);
+    await this.storage.insertDocument(this.name, validatedDoc);
     return deepClone(validatedDoc);
   }
 
@@ -184,35 +89,33 @@ export class Collection<T extends Document> {
   async insertMany(docs: (Omit<T, '_id'> & { _id?: string })[]): Promise<T[]> {
     if (docs.length === 0) return [];
 
-    const data = await this.getData();
+    const existingIds = new Set(this.storage.getDocumentIds(this.name));
     const insertedDocs: T[] = [];
-    const existingIds = new Set(data.documents.map((d) => d._id));
 
     for (const doc of docs) {
       const _id = doc._id || this.idGenerator();
-
       if (existingIds.has(_id)) {
         throw new DuplicateKeyError(this.name, _id);
       }
-
       existingIds.add(_id);
       const newDoc = { ...deepClone(doc), _id } as T;
       const validatedDoc = this.validate(newDoc);
-      data.documents.push(validatedDoc);
-      insertedDocs.push(deepClone(validatedDoc));
+      insertedDocs.push(validatedDoc);
     }
 
-    await this.save(data);
-    return insertedDocs;
+    await this.storage.insertDocuments(this.name, insertedDocs);
+    return insertedDocs.map((doc) => deepClone(doc));
   }
 
   /**
    * Find documents matching a query
-   * When projection is used, only specified fields are returned
+   * Note: This loads documents from disk for filtering
    */
   async find(query?: Query<T>, options?: FindOptions<T>): Promise<T[]> {
-    const data = await this.getData();
-    let results = this.queryEngine.filter(data.documents, query);
+    // For empty query with projection only, we can optimize
+    // But for filtering, we need to load documents
+    const allDocs = await this.storage.getAllDocuments<T>(this.name);
+    let results = this.queryEngine.filter(allDocs, query);
 
     // Apply sort
     if (options?.sort) {
@@ -229,7 +132,7 @@ export class Collection<T extends Document> {
       results = results.slice(0, options.limit);
     }
 
-    // Apply projection and clone results
+    // Apply projection
     if (options?.projection) {
       return results.map(
         (doc) =>
@@ -252,18 +155,24 @@ export class Collection<T extends Document> {
   }
 
   /**
-   * Find a document by ID
+   * Find a document by ID - optimized, uses cache
    */
   async findById(id: string): Promise<T | null> {
-    return this.findOne({ _id: id } as Query<T>);
+    const doc = await this.storage.getDocument<T>(this.name, id);
+    return doc ? deepClone(doc) : null;
   }
 
   /**
    * Count documents matching a query
    */
   async count(query?: Query<T>): Promise<number> {
-    const data = await this.getData();
-    const results = this.queryEngine.filter(data.documents, query);
+    if (!query || Object.keys(query).length === 0) {
+      // Optimized - count from index without loading documents
+      return this.storage.getCount(this.name);
+    }
+
+    const allDocs = await this.storage.getAllDocuments<T>(this.name);
+    const results = this.queryEngine.filter(allDocs, query);
     return results.length;
   }
 
@@ -271,16 +180,16 @@ export class Collection<T extends Document> {
    * Update documents matching a query
    */
   async update(query: Query<T>, update: UpdateOperators<T> | Partial<T>): Promise<number> {
-    const data = await this.getData();
-    const matchingDocs = this.queryEngine.filter(data.documents, query);
+    const allDocs = await this.storage.getAllDocuments<T>(this.name);
+    const matchingDocs = this.queryEngine.filter(allDocs, query);
 
     if (matchingDocs.length === 0) return 0;
 
     for (const doc of matchingDocs) {
       this.applyUpdate(doc, update);
+      await this.storage.updateDocument(this.name, doc);
     }
 
-    await this.save(data);
     return matchingDocs.length;
   }
 
@@ -288,90 +197,98 @@ export class Collection<T extends Document> {
    * Update a single document matching a query
    */
   async updateOne(query: Query<T>, update: UpdateOperators<T> | Partial<T>): Promise<T | null> {
-    const data = await this.getData();
-    const matchingDocs = this.queryEngine.filter(data.documents, query);
+    const allDocs = await this.storage.getAllDocuments<T>(this.name);
+    const matchingDocs = this.queryEngine.filter(allDocs, query);
 
     if (matchingDocs.length === 0) return null;
 
     const doc = matchingDocs[0];
     this.applyUpdate(doc, update);
-
-    await this.save(data);
+    await this.storage.updateDocument(this.name, doc);
     return deepClone(doc);
   }
 
   /**
-   * Update a document by ID
+   * Update a document by ID - optimized, uses cache
    */
   async updateById(id: string, update: UpdateOperators<T> | Partial<T>): Promise<T | null> {
-    return this.updateOne({ _id: id } as Query<T>, update);
+    const doc = await this.storage.getDocument<T>(this.name, id);
+    if (!doc) return null;
+
+    this.applyUpdate(doc, update);
+    await this.storage.updateDocument(this.name, doc);
+    return deepClone(doc);
   }
 
   /**
    * Delete documents matching a query
    */
   async delete(query: Query<T>): Promise<number> {
-    const data = await this.getData();
-    const initialCount = data.documents.length;
+    const allDocs = await this.storage.getAllDocuments<T>(this.name);
+    const matchingDocs = this.queryEngine.filter(allDocs, query);
 
-    data.documents = data.documents.filter((doc) => !this.queryEngine.matches(doc, query));
+    if (matchingDocs.length === 0) return 0;
 
-    const deletedCount = initialCount - data.documents.length;
-
-    if (deletedCount > 0) {
-      await this.save(data);
-    }
-
-    return deletedCount;
+    const idsToDelete = matchingDocs.map((doc) => doc._id);
+    await this.storage.deleteDocuments(this.name, idsToDelete);
+    return matchingDocs.length;
   }
 
   /**
    * Delete a single document matching a query
    */
   async deleteOne(query: Query<T>): Promise<T | null> {
-    const data = await this.getData();
-    const index = data.documents.findIndex((doc) => this.queryEngine.matches(doc, query));
+    const allDocs = await this.storage.getAllDocuments<T>(this.name);
+    const matchingDocs = this.queryEngine.filter(allDocs, query);
 
-    if (index === -1) return null;
+    if (matchingDocs.length === 0) return null;
 
-    const [deleted] = data.documents.splice(index, 1);
-    await this.save(data);
-
-    return deepClone(deleted);
+    const doc = matchingDocs[0];
+    await this.storage.deleteDocument(this.name, doc._id);
+    return deepClone(doc);
   }
 
   /**
-   * Delete a document by ID
+   * Delete a document by ID - optimized
    */
   async deleteById(id: string): Promise<T | null> {
-    return this.deleteOne({ _id: id } as Query<T>);
+    const doc = await this.storage.getDocument<T>(this.name, id);
+    if (!doc) return null;
+
+    await this.storage.deleteDocument(this.name, id);
+    return deepClone(doc);
   }
 
   /**
-   * Get all documents in the collection
+   * Get all documents
    */
   async getAll(): Promise<T[]> {
     return this.find();
   }
 
   /**
-   * Clear all documents in the collection
+   * Clear all documents
    */
   async clear(): Promise<void> {
-    const data = await this.getData();
-    data.documents = [];
-    await this.save(data);
+    await this.storage.clearCollection(this.name);
   }
 
   /**
-   * Drop the collection (delete the file)
+   * Drop the collection
    */
   async drop(): Promise<void> {
-    await this.storage.delete(this.name);
+    await this.storage.deleteCollection(this.name);
   }
 
   /**
-   * Get the collection name
+   * Flush pending writes
+   */
+  async flush(): Promise<void> {
+    await this.storage.flush();
+  }
+
+  /**
+   * Get collection name
    */
   getName(): string {
     return this.name;
@@ -381,26 +298,22 @@ export class Collection<T extends Document> {
    * Apply update operators to a document
    */
   private applyUpdate(doc: T, update: UpdateOperators<T> | Partial<T>): void {
-    // Check if it's using operators or direct update
     const hasOperators = Object.keys(update).some((key) => key.startsWith('$'));
 
     if (!hasOperators) {
-      // Direct update (merge)
       Object.assign(doc, update);
       return;
     }
 
     const ops = update as UpdateOperators<T>;
 
-    // $set - set fields
     if (ops.$set) {
       for (const [key, value] of Object.entries(ops.$set)) {
-        if (key === '_id') continue; // Don't allow changing _id
+        if (key === '_id') continue;
         setNestedValue(doc as Record<string, unknown>, key, value);
       }
     }
 
-    // $unset - remove fields
     if (ops.$unset) {
       for (const key of Object.keys(ops.$unset)) {
         if (key === '_id') continue;
@@ -408,7 +321,6 @@ export class Collection<T extends Document> {
       }
     }
 
-    // $inc - increment numeric fields
     if (ops.$inc) {
       for (const [key, increment] of Object.entries(ops.$inc)) {
         const current = (doc as Record<string, unknown>)[key];
@@ -418,7 +330,6 @@ export class Collection<T extends Document> {
       }
     }
 
-    // $push - add to array
     if (ops.$push) {
       for (const [key, value] of Object.entries(ops.$push)) {
         const current = (doc as Record<string, unknown>)[key];
@@ -428,7 +339,6 @@ export class Collection<T extends Document> {
       }
     }
 
-    // $pull - remove from array
     if (ops.$pull) {
       for (const [key, value] of Object.entries(ops.$pull)) {
         const current = (doc as Record<string, unknown>)[key];
@@ -441,7 +351,6 @@ export class Collection<T extends Document> {
       }
     }
 
-    // $addToSet - add to array only if not exists
     if (ops.$addToSet) {
       for (const [key, value] of Object.entries(ops.$addToSet)) {
         const current = (doc as Record<string, unknown>)[key];
@@ -456,7 +365,7 @@ export class Collection<T extends Document> {
   }
 
   /**
-   * Sort documents by the specified sort options
+   * Sort documents
    */
   private sortDocuments(documents: T[], sort: Sort<T>): T[] {
     const sortEntries = Object.entries(sort) as [keyof T, SortOrder][];

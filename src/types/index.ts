@@ -23,6 +23,16 @@ export interface ComparisonOperators<T> {
   $startsWith?: string;
   $endsWith?: string;
   $contains?: T extends unknown[] ? T[number] : never;
+  /** Array must contain all specified values */
+  $all?: T extends unknown[] ? T : never;
+  /** Array element must match the sub-query */
+  $elemMatch?: T extends unknown[] ? Record<string, unknown> : never;
+  /** Array must have exact length */
+  $size?: number;
+  /** Value must be of specified type: 'string' | 'number' | 'boolean' | 'array' | 'object' | 'null' */
+  $type?: 'string' | 'number' | 'boolean' | 'array' | 'object' | 'null' | 'undefined';
+  /** Modulo operation: [divisor, remainder] - matches if value % divisor === remainder */
+  $mod?: [number, number];
 }
 
 /**
@@ -66,12 +76,25 @@ export type Sort<T> = {
 };
 
 /**
+ * Projection specification for field selection
+ * Use 1 to include fields, 0 to exclude fields
+ * Cannot mix inclusion and exclusion (except _id)
+ */
+export type Projection<T> = {
+  [K in keyof T]?: 0 | 1 | boolean;
+} & {
+  _id?: 0 | 1 | boolean;
+};
+
+/**
  * Options for find operations
  */
 export interface FindOptions<T> {
   sort?: Sort<T>;
   limit?: number;
   skip?: number;
+  /** Field projection - specify which fields to include/exclude */
+  projection?: Projection<T>;
 }
 
 /**
@@ -103,6 +126,18 @@ export interface HighConcurrencyOptions {
 }
 
 /**
+ * Lazy loading mode options for memory-efficient storage
+ */
+export interface LazyLoadingOptions {
+  /** Enable lazy loading mode */
+  enabled: boolean;
+  /** Maximum documents to keep in memory cache (default: 1000) */
+  cacheSize?: number;
+  /** Documents per chunk file (default: 10000, 0 = no chunking) */
+  chunkSize?: number;
+}
+
+/**
  * JsonDB configuration options
  */
 export interface JsonDBOptions {
@@ -118,6 +153,8 @@ export interface JsonDBOptions {
   fileExtension?: string;
   /** High-concurrency mode options (opt-in) */
   highConcurrency?: HighConcurrencyOptions;
+  /** Lazy loading mode options for memory-efficient storage (opt-in) */
+  lazyLoading?: LazyLoadingOptions;
 }
 
 /**
@@ -140,4 +177,3 @@ export interface StorageAdapter {
   delete(collectionName: string): Promise<void>;
   list(): Promise<string[]>;
 }
-

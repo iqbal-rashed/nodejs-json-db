@@ -94,7 +94,13 @@ export function deleteNestedValue(obj: Record<string, unknown>, path: string): b
  * Check if a value is a plain object
  */
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Date) && !(value instanceof RegExp);
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    !(value instanceof Date) &&
+    !(value instanceof RegExp)
+  );
 }
 
 /**
@@ -115,4 +121,71 @@ export function debounce<T extends (...args: unknown[]) => unknown>(
       timeoutId = null;
     }, delay);
   };
+}
+
+/**
+ * Apply projection to a document
+ * Follows MongoDB projection semantics:
+ * - Cannot mix inclusion and exclusion (except for _id)
+ * - _id is included by default unless explicitly excluded
+ * - If projection is empty or undefined, return the full document
+ */
+export function applyProjection<T extends Record<string, unknown>>(
+  doc: T,
+  projection?: Record<string, 0 | 1 | boolean>
+): Partial<T> {
+  if (!projection || Object.keys(projection).length === 0) {
+    return doc;
+  }
+
+  // Separate _id handling from other fields
+  const fields = Object.entries(projection).filter(([key]) => key !== '_id');
+  const idProjection = projection._id;
+
+  // Determine if this is an inclusion or exclusion projection
+  // (excluding _id from this determination)
+  const hasInclusion = fields.some(([, value]) => value === 1 || value === true);
+  const hasExclusion = fields.some(([, value]) => value === 0 || value === false);
+
+  // Can't mix inclusion and exclusion (MongoDB behavior)
+  if (hasInclusion && hasExclusion) {
+    throw new Error('Cannot mix inclusion and exclusion in projection');
+  }
+
+  const isInclusion = hasInclusion;
+  const result: Partial<T> = {};
+
+  if (isInclusion) {
+    // Inclusion mode: only include specified fields
+    // _id is included by default unless explicitly excluded
+    const includeId = idProjection !== 0 && idProjection !== false;
+    if (includeId && '_id' in doc) {
+      (result as Record<string, unknown>)._id = doc._id;
+    }
+
+    for (const [key, value] of fields) {
+      if ((value === 1 || value === true) && key in doc) {
+        (result as Record<string, unknown>)[key] = doc[key];
+      }
+    }
+  } else {
+    // Exclusion mode: copy all fields except excluded ones
+    const excludedFields = new Set(
+      fields.filter(([, value]) => value === 0 || value === false).map(([key]) => key)
+    );
+
+    // Handle _id exclusion
+    const excludeId = idProjection === 0 || idProjection === false;
+    if (excludeId) {
+      excludedFields.add('_id');
+    }
+
+    for (const key of Object.keys(doc)) {
+      if (!excludedFields.has(key)) {
+        (result as Record<string, unknown>)[key] = doc[key];
+      }
+    }
+  }
+
+  return result;
 }

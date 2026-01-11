@@ -9,3 +9,8 @@ export { PartitionManager } from './PartitionManager';
 export { WorkerPool, parallelLimit } from './WorkerPool';
 export { HighConcurrencyStorage } from './HighConcurrencyStorage';
 export { HighConcurrencyCollection } from './HighConcurrencyCollection';
+
+// Lazy loading components
+export { LRUCache } from './LRUCache';
+export { LazyStorage } from './LazyStorage';
+export { LazyCollection } from './LazyCollection';

@@ -98,7 +98,10 @@ export class QueryEngine {
 
     if ('$regex' in operators) {
       if (typeof value !== 'string') return false;
-      const regex = operators.$regex instanceof RegExp ? operators.$regex : new RegExp(operators.$regex as string);
+      const regex =
+        operators.$regex instanceof RegExp
+          ? operators.$regex
+          : new RegExp(operators.$regex as string);
       if (!regex.test(value)) return false;
     }
 
@@ -115,6 +118,58 @@ export class QueryEngine {
     if ('$contains' in operators) {
       if (!Array.isArray(value)) return false;
       if (!value.some((item) => this.isEqual(item, operators.$contains))) return false;
+    }
+
+    // $all - array must contain all specified values
+    if ('$all' in operators && Array.isArray(operators.$all)) {
+      if (!Array.isArray(value)) return false;
+      if (!operators.$all.every((item) => value.some((v) => this.isEqual(v, item)))) return false;
+    }
+
+    // $elemMatch - at least one array element must match the sub-query
+    if ('$elemMatch' in operators && operators.$elemMatch) {
+      if (!Array.isArray(value)) return false;
+      const subQuery = operators.$elemMatch as Record<string, unknown>;
+      const hasMatch = value.some((item) => {
+        if (typeof item !== 'object' || item === null) return false;
+        // For each key in the sub-query, check if the item matches
+        return Object.entries(subQuery).every(([key, condition]) => {
+          const itemValue = (item as Record<string, unknown>)[key];
+          return this.matchesCondition(itemValue, condition);
+        });
+      });
+      if (!hasMatch) return false;
+    }
+
+    // $size - array must have exact length
+    if ('$size' in operators && typeof operators.$size === 'number') {
+      if (!Array.isArray(value)) return false;
+      if (value.length !== operators.$size) return false;
+    }
+
+    // $type - value must be of specified type
+    if ('$type' in operators && operators.$type) {
+      const expectedType = operators.$type;
+      let actualType: string;
+
+      if (value === null) {
+        actualType = 'null';
+      } else if (value === undefined) {
+        actualType = 'undefined';
+      } else if (Array.isArray(value)) {
+        actualType = 'array';
+      } else {
+        actualType = typeof value;
+      }
+
+      if (actualType !== expectedType) return false;
+    }
+
+    // $mod - modulo operation: value % divisor === remainder
+    if ('$mod' in operators && Array.isArray(operators.$mod) && operators.$mod.length === 2) {
+      if (typeof value !== 'number') return false;
+      const [divisor, remainder] = operators.$mod as [number, number];
+      if (value % divisor !== remainder) return false;
     }
 
     return true;
@@ -150,7 +205,9 @@ export class QueryEngine {
       const aKeys = Object.keys(a as object);
       const bKeys = Object.keys(b as object);
       if (aKeys.length !== bKeys.length) return false;
-      return aKeys.every((key) => this.isEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]));
+      return aKeys.every((key) =>
+        this.isEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])
+      );
     }
 
     return false;

@@ -4,19 +4,21 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
 
-A production-ready, lightweight JSON-based database for Node.js and Electron applications. Zero external database dependencies, fully typed, with a MongoDB-like query API and optional high-concurrency mode.
+A production-ready, lightweight JSON-based database for Node.js and Electron applications. Zero external database dependencies, fully typed, with a MongoDB-like query API. Supports three storage modes: Standard, High-Concurrency, and Lazy Loading.
 
 ## ✨ Features
 
 - 🚀 **Zero Dependencies** - No external database server required
 - 📦 **Dual Module Support** - Works with both ESM and CommonJS
 - 🔒 **Type-Safe** - Full TypeScript support with generics
-- 🔍 **MongoDB-like Queries** - Familiar query operators (`$eq`, `$gt`, `$in`, `$regex`, etc.)
+- 🔍 **MongoDB-like Queries** - Rich query operators (`$eq`, `$gt`, `$in`, `$regex`, `$all`, `$elemMatch`, etc.)
+- 🎯 **Field Projection** - Select which fields to return in queries
 - ⚡ **High Performance** - Memory caching with atomic file writes
 - 🔄 **High-Concurrency Mode** - Partitioned storage with write batching for massive throughput
+- 💾 **Lazy Loading Mode** - Memory-efficient storage for huge datasets with LRU caching
 - ✅ **Schema Validation** - Optional Zod integration for document validation
 - 🖥️ **Electron Ready** - Perfect for desktop applications
-- 🧪 **Well Tested** - 107 tests with comprehensive coverage
+- 🧪 **Well Tested** - 141 tests with comprehensive coverage
 
 ## 📦 Installation
 
@@ -29,6 +31,7 @@ yarn add nodejs-json-db
 ```
 
 For schema validation (optional):
+
 ```bash
 npm install zod
 ```
@@ -75,21 +78,22 @@ Performance tested with documents up to 1 million records:
 
 ### Write Performance (insertMany)
 
-| Documents | Standard Mode | High-Concurrency Mode |
-|-----------|---------------|----------------------|
-| 100,000 | 390K docs/sec (56 MB/s) | 355K docs/sec (51 MB/s) |
-| 500,000 | 382K docs/sec (55 MB/s) | **423K docs/sec (61 MB/s)** ✅ |
-| 1,000,000 | 392K docs/sec (56 MB/s) | **392K docs/sec (56 MB/s)** |
+| Documents | Standard Mode           | High-Concurrency Mode          |
+| --------- | ----------------------- | ------------------------------ |
+| 100,000   | 390K docs/sec (56 MB/s) | 355K docs/sec (51 MB/s)        |
+| 500,000   | 382K docs/sec (55 MB/s) | **423K docs/sec (61 MB/s)** ✅ |
+| 1,000,000 | 392K docs/sec (56 MB/s) | **392K docs/sec (56 MB/s)**    |
 
 ### Read Performance (find)
 
-| Documents | Standard Mode | High-Concurrency Mode |
-|-----------|---------------|----------------------|
-| 1,000 | 648K docs/sec (93 MB/s) | **803K docs/sec (115 MB/s)** ✅ |
-| 10,000 | 1.5M docs/sec (218 MB/s) | **2.2M docs/sec (309 MB/s)** ✅ |
-| 100,000+ | **2.8M+ docs/sec** | 2.0M docs/sec |
+| Documents | Standard Mode            | High-Concurrency Mode           |
+| --------- | ------------------------ | ------------------------------- |
+| 1,000     | 648K docs/sec (93 MB/s)  | **803K docs/sec (115 MB/s)** ✅ |
+| 10,000    | 1.5M docs/sec (218 MB/s) | **2.2M docs/sec (309 MB/s)** ✅ |
+| 100,000+  | **2.8M+ docs/sec**       | 2.0M docs/sec                   |
 
 Run benchmarks yourself:
+
 ```bash
 npx tsx examples/benchmark.ts
 ```
@@ -103,10 +107,10 @@ const db = new JsonDB({
   dataDir: './data',
   highConcurrency: {
     enabled: true,
-    partitions: 16,        // Data shards (default: 16)
-    batchSize: 1000,       // Writes before auto-flush (default: 1000)
-    flushInterval: 100,    // Max ms before flush (default: 100)
-    maxConcurrentIO: 4,    // Parallel I/O operations (default: 4)
+    partitions: 16, // Data shards (default: 16)
+    batchSize: 1000, // Writes before auto-flush (default: 1000)
+    flushInterval: 100, // Max ms before flush (default: 100)
+    maxConcurrentIO: 4, // Parallel I/O operations (default: 4)
   },
 });
 
@@ -127,12 +131,57 @@ await db.close();
 
 ### When to Use High-Concurrency Mode
 
-| Use Case | Recommended Mode |
-|----------|-----------------|
-| Desktop apps, small datasets | Standard |
-| Web servers with concurrent requests | High-Concurrency |
-| Bulk data import | Either (both fast) |
-| Real-time applications | High-Concurrency |
+| Use Case                             | Recommended Mode   |
+| ------------------------------------ | ------------------ |
+| Desktop apps, small datasets         | Standard           |
+| Web servers with concurrent requests | High-Concurrency   |
+| Bulk data import                     | Either (both fast) |
+| Real-time applications               | High-Concurrency   |
+
+## 💾 Lazy Loading Mode
+
+For applications with huge datasets that don't fit in memory, enable lazy loading mode:
+
+```typescript
+const db = new JsonDB({
+  dataDir: './data',
+  lazyLoading: {
+    enabled: true,
+    cacheSize: 1000, // Max documents in memory (default: 1000)
+    chunkSize: 10000, // Future: documents per chunk file
+  },
+});
+
+await db.connect();
+const users = db.collection('users');
+
+// Documents are loaded on-demand with LRU caching
+const user = await users.findById('some-id'); // Efficient - uses cache
+const count = await users.count(); // Efficient - uses index only
+
+// Queries still work but load documents from disk
+const results = await users.find({ age: { $gt: 25 } });
+
+await db.close();
+```
+
+### How It Works
+
+- **Index in memory**: Only document IDs are kept in memory
+- **LRU cache**: Frequently accessed documents are cached (up to `cacheSize`)
+- **On-demand loading**: Full documents are loaded from disk when needed
+- **ID-based optimization**: `findById()` and `count()` are optimized
+
+### When to Use Lazy Loading Mode
+
+| Use Case                       | Recommended Mode |
+| ------------------------------ | ---------------- |
+| Small datasets (< 10K docs)    | Standard         |
+| Medium datasets                | Standard or Lazy |
+| Huge datasets (> 100K docs)    | Lazy Loading     |
+| Memory-constrained environment | Lazy Loading     |
+| Frequent full queries          | Standard         |
+| ID-based access patterns       | Lazy Loading     |
 
 ## ✅ Schema Validation (Zod)
 
@@ -174,14 +223,15 @@ try {
 
 ### JsonDB Options
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `dataDir` | `string` | **required** | Path to store JSON files |
-| `autoSave` | `boolean` | `true` | Auto-save after writes |
-| `saveDebounce` | `number` | `0` | Debounce time (ms) for saves |
-| `prettyPrint` | `boolean` | `true` | Format JSON files |
-| `fileExtension` | `string` | `.json` | Custom file extension |
-| `highConcurrency` | `object` | `undefined` | Enable high-concurrency mode |
+| Option            | Type      | Default      | Description                                |
+| ----------------- | --------- | ------------ | ------------------------------------------ |
+| `dataDir`         | `string`  | **required** | Path to store JSON files                   |
+| `autoSave`        | `boolean` | `true`       | Auto-save after writes                     |
+| `saveDebounce`    | `number`  | `0`          | Debounce time (ms) for saves               |
+| `prettyPrint`     | `boolean` | `true`       | Format JSON files                          |
+| `fileExtension`   | `string`  | `.json`      | Custom file extension                      |
+| `highConcurrency` | `object`  | `undefined`  | Enable high-concurrency mode               |
+| `lazyLoading`     | `object`  | `undefined`  | Enable lazy loading mode for huge datasets |
 
 ### JsonDB Methods
 
@@ -234,21 +284,38 @@ collection.getName();                    // Get collection name
 
 ### Comparison
 
-| Operator | Example |
-|----------|---------|
-| `$eq` | `{ age: { $eq: 25 } }` |
-| `$ne` | `{ status: { $ne: 'deleted' } }` |
-| `$gt` / `$gte` | `{ age: { $gte: 18 } }` |
-| `$lt` / `$lte` | `{ price: { $lt: 100 } }` |
+| Operator       | Example                               |
+| -------------- | ------------------------------------- |
+| `$eq`          | `{ age: { $eq: 25 } }`                |
+| `$ne`          | `{ status: { $ne: 'deleted' } }`      |
+| `$gt` / `$gte` | `{ age: { $gte: 18 } }`               |
+| `$lt` / `$lte` | `{ price: { $lt: 100 } }`             |
 | `$in` / `$nin` | `{ role: { $in: ['admin', 'mod'] } }` |
 
 ### String
 
-| Operator | Example |
-|----------|---------|
-| `$regex` | `{ email: { $regex: /@gmail\.com$/ } }` |
-| `$startsWith` | `{ name: { $startsWith: 'John' } }` |
-| `$endsWith` | `{ email: { $endsWith: '.com' } }` |
+| Operator      | Example                                 |
+| ------------- | --------------------------------------- |
+| `$regex`      | `{ email: { $regex: /@gmail\.com$/ } }` |
+| `$startsWith` | `{ name: { $startsWith: 'John' } }`     |
+| `$endsWith`   | `{ email: { $endsWith: '.com' } }`      |
+
+### Array
+
+| Operator     | Description               | Example                                          |
+| ------------ | ------------------------- | ------------------------------------------------ |
+| `$contains`  | Array contains value      | `{ tags: { $contains: 'admin' } }`               |
+| `$all`       | Array contains all values | `{ tags: { $all: ['user', 'premium'] } }`        |
+| `$elemMatch` | Element matches sub-query | `{ items: { $elemMatch: { qty: { $gt: 5 } } } }` |
+| `$size`      | Array has exact length    | `{ tags: { $size: 3 } }`                         |
+
+### Utility
+
+| Operator  | Description      | Example                        |
+| --------- | ---------------- | ------------------------------ |
+| `$type`   | Value type check | `{ age: { $type: 'number' } }` |
+| `$mod`    | Modulo operation | `{ qty: { $mod: [4, 0] } }`    |
+| `$exists` | Field exists     | `{ email: { $exists: true } }` |
 
 ### Logical
 
@@ -263,23 +330,33 @@ collection.getName();                    // Get collection name
 { $not: { status: 'deleted' } }
 ```
 
-### Existence
+## 🎯 Projection
+
+Select which fields to return in query results:
 
 ```typescript
-{ email: { $exists: true } }   // Field exists
-{ deletedAt: { $exists: false } }  // Field doesn't exist
+// Include only specific fields (_id included by default)
+await users.find({}, { projection: { name: 1, email: 1 } });
+
+// Exclude specific fields
+await users.find({}, { projection: { password: 0, secret: 0 } });
+
+// Exclude _id
+await users.find({}, { projection: { name: 1, _id: 0 } });
 ```
+
+> **Note:** Cannot mix inclusion and exclusion (except for `_id`).
 
 ## 📝 Update Operators
 
-| Operator | Description | Example |
-|----------|-------------|---------|
-| `$set` | Set field | `{ $set: { name: 'New' } }` |
-| `$unset` | Remove field | `{ $unset: { temp: true } }` |
-| `$inc` | Increment | `{ $inc: { views: 1 } }` |
-| `$push` | Add to array | `{ $push: { tags: 'new' } }` |
-| `$pull` | Remove from array | `{ $pull: { tags: 'old' } }` |
-| `$addToSet` | Add unique | `{ $addToSet: { tags: 'unique' } }` |
+| Operator    | Description       | Example                             |
+| ----------- | ----------------- | ----------------------------------- |
+| `$set`      | Set field         | `{ $set: { name: 'New' } }`         |
+| `$unset`    | Remove field      | `{ $unset: { temp: true } }`        |
+| `$inc`      | Increment         | `{ $inc: { views: 1 } }`            |
+| `$push`     | Add to array      | `{ $push: { tags: 'new' } }`        |
+| `$pull`     | Remove from array | `{ $pull: { tags: 'old' } }`        |
+| `$addToSet` | Add unique        | `{ $addToSet: { tags: 'unique' } }` |
 
 ## 🖥️ Electron Integration
 
@@ -298,6 +375,7 @@ await db.connect();
 ## 📁 Data Storage
 
 Standard mode stores one JSON file per collection:
+
 ```
 data/
 ├── users.json
@@ -306,12 +384,23 @@ data/
 ```
 
 High-concurrency mode partitions data:
+
 ```
 data/
 ├── users_p0.json
 ├── users_p1.json
 ├── users_p2.json
 └── ...
+```
+
+Lazy loading mode uses index files for fast loading:
+
+```
+data/
+├── users.json           # Full document data
+├── users.index.json     # ID index for fast access
+├── posts.json
+└── posts.index.json
 ```
 
 ## 🧪 Examples

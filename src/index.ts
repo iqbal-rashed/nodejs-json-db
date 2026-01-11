@@ -22,6 +22,7 @@ export type {
   FindOptions,
   Sort,
   SortOrder,
+  Projection,
   CollectionOptions,
   JsonDBOptions,
   CollectionData,
